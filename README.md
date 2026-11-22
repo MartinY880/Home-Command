@@ -20,7 +20,17 @@ Other gateways (pfSense, OPNsense, MikroTik) are not supported.
 
 ## Install
 
-Pick one. Both end with a web page on port 3000 that walks you through the rest.
+Pick one. Each ends with a web page on port 3000 that walks you through the rest.
+
+### Proxmox VE (one line)
+
+Paste this into the Proxmox host's shell. It creates a small Debian container and installs Home Command in it.
+Run the same line again later to update.
+
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/MartinY880/Home-Command/main/proxmox/install.sh)"
+
+It asks before creating anything. Defaults are 2 cores, 2 GB memory and a 16 GB disk; to change them put
+settings in front of `bash`, for example `HC_MEMORY=4096 HC_DISK=32 HC_STORAGE=local-lvm bash -c "..."`.
 
 ### Docker
 
