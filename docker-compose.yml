@@ -1,0 +1,17 @@
+# Home Command portal. Start with:  docker compose up -d   then open http://THIS-MACHINE:3000
+services:
+  homecommand:
+    build: .
+    image: homecommand
+    container_name: homecommand
+    restart: unless-stopped
+    # Host networking lets the portal see the real addresses of your gateway and log shippers,
+    # and makes the setup walkthrough show this machine's own address. Ports used:
+    #   3000/tcp  web page and log shippers      5514/udp  gateway log      2055/udp  NetFlow (optional)
+    network_mode: host
+    environment:
+      HC_PORT: "3000"
+    volumes:
+      - homecommand-data:/data
+volumes:
+  homecommand-data:

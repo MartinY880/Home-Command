@@ -1,0 +1,4 @@
+data/
+*.mmdb
+__pycache__/
+*.bak*
