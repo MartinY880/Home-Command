@@ -47,7 +47,7 @@ CREATE INDEX IF NOT EXISTS req_ts ON req(ts); CREATE INDEX IF NOT EXISTS req_ip 
 CREATE TABLE IF NOT EXISTS fw(ts INT, chain TEXT, action TEXT, rule TEXT, src TEXT, dst TEXT, proto TEXT, dpt INT, cc TEXT, owner TEXT);
 CREATE INDEX IF NOT EXISTS fw_ts ON fw(ts); CREATE INDEX IF NOT EXISTS fw_src ON fw(src, ts);
 CREATE TABLE IF NOT EXISTS flow(ts INT, dir TEXT, action TEXT, src_net TEXT, dst_net TEXT, src_name TEXT, src_ip TEXT, src_mac TEXT, dst_name TEXT, dst_ip TEXT, dst_port INT, domain TEXT, cc TEXT, owner TEXT, service TEXT, proto TEXT, risk TEXT, bytes INT, tx INT, rx INT);
-CREATE INDEX IF NOT EXISTS flow_ts ON flow(ts); CREATE INDEX IF NOT EXISTS flow_mac ON flow(src_mac, ts); CREATE INDEX IF NOT EXISTS flow_dst ON flow(dst_ip, ts); CREATE INDEX IF NOT EXISTS flow_src ON flow(src_ip, ts);
+CREATE INDEX IF NOT EXISTS flow_ts ON flow(ts); CREATE INDEX IF NOT EXISTS flow_mac ON flow(src_mac, ts); CREATE INDEX IF NOT EXISTS flow_dst ON flow(dst_ip, ts); CREATE INDEX IF NOT EXISTS flow_src ON flow(src_ip, ts); CREATE INDEX IF NOT EXISTS flow_owner ON flow(owner, ts);
 CREATE TABLE IF NOT EXISTS dns(ts INT, inst TEXT, client TEXT, domain TEXT, qtype TEXT, blocked INT);
 CREATE INDEX IF NOT EXISTS dns_ts ON dns(ts); CREATE INDEX IF NOT EXISTS dns_client ON dns(client, ts); CREATE INDEX IF NOT EXISTS dns_domain ON dns(domain, ts);
 CREATE TABLE IF NOT EXISTS device(mac TEXT PRIMARY KEY, name TEXT, label TEXT, ip TEXT, network TEXT, oui TEXT, wired INT, first_seen INT, last_seen INT, known INT DEFAULT 1, blocked INT DEFAULT 0, rate INT DEFAULT 0, uplink TEXT);
@@ -565,7 +565,7 @@ def c_flows():
             if q1("SELECT 1 FROM seen WHERE mac=? AND owner=?", (mac, key)) is None:
                 first = q1("SELECT MIN(first_ts) FROM seen WHERE mac=?", (mac,))
                 w("INSERT OR IGNORE INTO seen VALUES(?,?,?)", (mac, key, ts))
-                if first and ts - first > learn:
+                if first and ts - first > learn and dip not in OWN and not ipaddress.ip_address(dip) in CGNAT and int(d.get("port") or 0) != 123:   # time-sync servers rotate constantly
                     add_item("dest", "anomaly", f"newdest:{mac}:{key}", f"{sname} contacted somewhere it has never contacted before",
                              f"Destination {doms[0] if doms else dip}, {pname(int(d.get('port') or 0))}, owned by {owner or 'an unknown network'} ({cname(cc)}). {fmt_bytes(t.get('bytes_total'))} exchanged.",
                              "device", mac, extra={"owner": key, "name": sname, "domain": doms[0] if doms else "", "dip": dip, "port": int(d.get("port") or 0), "cc": cc, "bytes": int(t.get("bytes_total") or 0), "service": f.get("service") or "", "net": src_net})
@@ -799,6 +799,10 @@ def group_items(items):
 def migrate_items():
     """Give alerts created before the structured format the same fields, and drop UniFi audit events that were mistaken for threats."""
     w("DELETE FROM item WHERE stype='page'")
+    for it in q("SELECT id, extra FROM item WHERE kind='dest' AND status='open'"):   # alerts raised before carrier-private addresses were excluded
+        try:
+            if ipaddress.ip_address(json.loads(it["extra"] or "{}").get("dip") or "0.0.0.0") in CGNAT: w("UPDATE item SET status='expired' WHERE id=?", (it["id"],))
+        except ValueError: pass
     for it in q("SELECT id, kind, title, detail, subject FROM item WHERE extra IS NULL OR extra='' OR extra='{}'"):
         t, d, ex = it["title"], it["detail"] or "", {}
         if it["kind"] == "threat":
@@ -814,6 +818,7 @@ def migrate_items():
             m = re.search(r"Destination (\S+), (?:.*?port (\d+)\)?|port (\d+)), owned by (.+?) \(", d); ex = {"domain": m[1] if m else "", "port": int(m[2] or m[3] or 0) if m else 0, "owner": m[4] if m else ""}
         if ex: w("UPDATE item SET extra=? WHERE id=?", (json.dumps(ex), it["id"]))
 
+CGNAT = ipaddress.ip_network("100.64.0.0/10")   # carrier-private space (mobile networks, Tailscale): has no public owner
 def a_item(p):
     it = q("SELECT * FROM item WHERE id=?", (int(p.get("id") or 0),))
     if not it: return {"error": "This alert no longer exists."}
@@ -950,18 +955,21 @@ def inc_ip(it, rel, s):
 def inc_dev(it, rel, s):
     mac, ex, now = it["subject"], it["ex"], int(time.time()); d = q("SELECT * FROM device WHERE mac=?", (mac,)); d = d[0] if d else {"mac": mac, "name": ex.get("name") or mac, "ip": ex.get("ip", ""), "network": ex.get("net", "")}
     d["online"] = (d.get("last_seen") or 0) > now - 300; name = d.get("label") or d.get("name")
-    usual = q("SELECT CASE WHEN owner!='' THEN owner ELSE dst_ip END who, MAX(cc) cc, SUM(bytes) b, COUNT(*) n, MIN(ts) first FROM flow WHERE src_mac=? AND dir='outgoing' GROUP BY who ORDER BY b DESC LIMIT 12", (mac,))
+    win = now - 30 * 86400
+    usual = q("SELECT CASE WHEN owner!='' THEN owner ELSE dst_ip END who, MAX(cc) cc, SUM(bytes) b, COUNT(*) n, MIN(ts) first FROM flow WHERE src_mac=? AND ts>? AND dir='outgoing' GROUP BY who ORDER BY b DESC LIMIT 12", (mac, win))
     for r in usual: r["country"] = cname(r["cc"])
     dns = q("SELECT ts, domain, blocked FROM dns WHERE client=? AND ts BETWEEN ? AND ? ORDER BY ts DESC LIMIT 60", (d.get("ip") or "-", it["ts"] - 1800, it["ts"] + 1800)) if d.get("ip") else []
     out = {"device": d, "usual": usual, "dns": dns}; tl = []; what = []; advice = []
     if it["kind"] == "dest":
-        owner = ex.get("owner") or ""; cond = "(owner=? OR (owner='' AND dst_ip=?))"
+        owner = ex.get("owner") or ""
+        try: ipaddress.ip_address(owner); cond, ca = "dst_ip=?", (owner,)   # no known owner: the alert is keyed by the address itself
+        except ValueError: cond, ca = "owner=?", (owner,)
         dest = q(f"""SELECT COUNT(*) n, SUM(bytes) b, SUM(tx) up, SUM(rx) down, MIN(ts) first, MAX(ts) last, GROUP_CONCAT(DISTINCT NULLIF(domain,'')) domains, GROUP_CONCAT(DISTINCT dst_port) ports,
-                     GROUP_CONCAT(DISTINCT NULLIF(service,'')) services, COUNT(DISTINCT dst_ip) ips, MAX(cc) cc, SUM(action='blocked') blocked FROM flow WHERE src_mac=? AND {cond}""", (mac, owner, owner))[0]
+                     GROUP_CONCAT(DISTINCT NULLIF(service,'')) services, COUNT(DISTINCT dst_ip) ips, MAX(cc) cc, SUM(action='blocked') blocked FROM flow WHERE src_mac=? AND ts>? AND {cond}""", (mac, win) + ca)[0]
         dest = {k: (v or 0) if k not in ("domains", "ports", "services", "cc") else (v or "") for k, v in dest.items()}; dest.update({"owner": owner, "country": cname(dest["cc"] or ex.get("cc"))})
-        flows = q(f"SELECT ts, dst_ip, dst_port, domain, service, proto, bytes, tx, rx, action FROM flow WHERE src_mac=? AND {cond} ORDER BY ts DESC LIMIT 100", (mac, owner, owner))
+        flows = q(f"SELECT ts, dst_ip, dst_port, domain, service, proto, bytes, tx, rx, action FROM flow WHERE src_mac=? AND ts>? AND {cond} ORDER BY ts DESC LIMIT 100", (mac, win) + ca)
         for r in flows: r["port"] = pname(r["dst_port"])
-        others = q(f"SELECT src_mac mac, MAX(src_name) name, MAX(src_net) net, COUNT(*) n, SUM(bytes) b, MIN(ts) first FROM flow WHERE {cond} AND src_mac!=? AND src_mac!='' GROUP BY src_mac ORDER BY b DESC LIMIT 15", (owner, owner, mac))
+        others = q(f"SELECT src_mac mac, MAX(src_name) name, MAX(src_net) net, COUNT(*) n, SUM(bytes) b, MIN(ts) first FROM flow WHERE {cond} AND ts>? AND src_mac!=? AND src_mac!='' GROUP BY src_mac ORDER BY b DESC LIMIT 15", ca + (win, mac))
         out.update({"dest": dest, "flows": flows, "others": others})
         for r in flows[:150]: tl.append([r["ts"], "Device", f"Connected to {r['domain'] or r['dst_ip']} on {r['port']}, sent {fmt_bytes(r['tx'])}, received {fmt_bytes(r['rx'])}", "Blocked" if r["action"] == "blocked" else "Allowed", "ok" if r["action"] == "blocked" else "warn"])
         doms = [x for x in dest["domains"].split(",") if x][:3]
@@ -978,7 +986,7 @@ def inc_dev(it, rel, s):
                   "If it makes no sense, block the device now and unblock it once you understand it. Blocking cuts it off from everything.",
                   "The device page lists everything else it talks to, for comparison."]
     else:
-        flows = q("SELECT ts, dst_ip, dst_port, domain, owner, cc, service, proto, bytes, tx, rx, action, dir, dst_net, dst_name FROM flow WHERE src_mac=? ORDER BY ts DESC LIMIT 100", (mac,))
+        flows = q("SELECT ts, dst_ip, dst_port, domain, owner, cc, service, proto, bytes, tx, rx, action, dir, dst_net, dst_name FROM flow WHERE src_mac=? AND ts>? ORDER BY ts DESC LIMIT 100", (mac, win))
         for r in flows: r["port"] = pname(r["dst_port"])
         out["flows"] = flows
         for r in flows: tl.append([r["ts"], "Device", f"Connected to {r['domain'] or r['dst_name'] or r['owner'] or r['dst_ip']} on {r['port']} ({fmt_bytes(r['bytes'])})", "Blocked" if r["action"] == "blocked" else "Allowed", "ok" if r["action"] == "blocked" else "warn"])
@@ -1639,7 +1647,8 @@ def a_action(b):
     elif act in ("dismiss", "known"):
         it = q("SELECT * FROM item WHERE id=?", (int(b["id"]),))
         if it:
-            w("UPDATE item SET status='dismissed', updated=? WHERE id=? OR (status IN ('open','handled') AND stype=? AND subject=? AND ?='dismiss')", (now, it[0]["id"], it[0]["stype"], it[0]["subject"], act))
+            w("UPDATE item SET status='dismissed', updated=? WHERE id=? OR (status IN ('open','handled') AND stype=? AND subject=? AND ?='dismiss') OR (status='open' AND kind='dest' AND stype=? AND subject=? AND ?=1)",
+              (now, it[0]["id"], it[0]["stype"], it[0]["subject"], act, it[0]["stype"], it[0]["subject"], 1 if (act == "known" and b.get("all")) else 0))
             if it[0]["kind"] == "device": w("UPDATE device SET known=1 WHERE mac=?", (it[0]["subject"],))
     elif act in ("block-device", "unblock-device"):
         mac = b["mac"].lower()
@@ -1774,7 +1783,7 @@ class H(BaseHTTPRequestHandler):
                 if not self.authed(): return self.send(401, {"error": "login"})
                 fn = API.get(u.path[5:])
                 if not fn: return self.send(404, {"error": "not found"})
-                TL.req = self; key = self.path; c = CACHE.get(key) if fn is not a_connections else None; ttl = 30 if fn is a_traffic or fn is a_netflow or p.get("range", "24h") not in ("1h", "24h") else 4
+                TL.req = self; key = self.path; c = CACHE.get(key) if fn is not a_connections else None; ttl = 30 if fn is a_traffic or fn is a_netflow or fn is a_item or p.get("range", "24h") not in ("1h", "24h") else 4
                 if c and time.time() - c[0] < ttl: return self.send(200, c[1])
                 out = json.dumps(fn(p), separators=(",", ":")).encode()
                 if len(CACHE) > 200: CACHE.clear()

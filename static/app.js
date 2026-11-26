@@ -124,7 +124,7 @@ function itemActs(it) {
     if (it.stype === 'device') acts += `<button class="btn pri" data-act='${e(JSON.stringify({action: 'block-device', mac: it.subject}))}' data-confirm="Block this device from the network? It will lose all connectivity until you unblock it.">Block device</button>`;
     if (it.kind === 'device') acts += `<button class="btn ghost" data-name="${e(it.subject)}">It's mine, name it</button>`;
   }
-  if (it.status === 'open' && it.kind === 'dest') acts += `<button class="btn" data-act='${e(JSON.stringify({action: 'known', id: it.id}))}'>Mark as known</button>`;
+  if (it.status === 'open' && it.kind === 'dest') acts += it.more ? `<button class="btn" data-act='${e(JSON.stringify({action: 'known', id: it.id, all: true}))}' data-confirm="Mark all ${it.more + 1} new destinations for this device as known? Open Investigate first if you want to look at each one." title="Clears every new-destination alert for this device">Mark all ${it.more + 1} as known</button>` : `<button class="btn" data-act='${e(JSON.stringify({action: 'known', id: it.id}))}'>Mark as known</button>`;
   else if (it.status === 'open' || it.status === 'handled') acts += `<button class="btn" data-act='${e(JSON.stringify({action: 'dismiss', id: it.id}))}' title="Remove this alert from your lists. The records stay searchable.">Dismiss</button>`;
   if (it.stype === 'ip' && it.banned) acts += unbanBtn(it.subject);
   return acts;
@@ -717,7 +717,7 @@ function chrome() {
   $('#range').innerHTML = Object.entries(RANGES).map(([k, l]) => `<button data-range="${k}" class="${k === range ? 'on' : ''}">${l}</button>`).join('');
 }
 async function render(quiet) {
-  if (loading) return; loading = true; const r = route(), fn = V[r.page] || V.home;
+  if (loading) return; loading = true; if (!quiet) { $('#livetxt').textContent = 'Loading…'; $('#main').style.opacity = '.5'; } const r = route(), fn = V[r.page] || V.home;
   try {
     if (!WORLD) WORLD = await (await fetch('/static/world.json')).json();
     const html = await fn(r); const cur = route();
@@ -726,10 +726,10 @@ async function render(quiet) {
       $('#main').innerHTML = html;
       if (quiet) { document.querySelectorAll('.tw').forEach((x, i) => { if (tops[i]) x.scrollTop = tops[i]; }); window.scrollTo(0, y); } else window.scrollTo(0, 0);
     }
-    lastOk = Date.now(); liveLabel();
+    lastOk = Date.now(); liveLabel(); $('#main').style.opacity = '';
   } catch (x) {
     if (x.message !== 'login') { $('#live .dot').className = 'dot off'; $('#livetxt').textContent = 'Not updating'; if (!quiet) $('#main').innerHTML = `<div class="empty">Could not load this page: ${e(x.message)}</div>`; }
-  } finally { loading = false; }
+  } finally { loading = false; $('#main').style.opacity = ''; }
 }
 // Scrolled down inside a list: hold the page still until the reader returns to the top of it.
 function reading() { return [...document.querySelectorAll('.tw')].some(x => x.scrollTop > 8) || [...document.querySelectorAll('.cform input:not([type=radio]):not([type=checkbox])')].some(x => x.value !== x.defaultValue) || [...document.querySelectorAll('.cform input[type=checkbox], .cform input[type=radio]')].some(x => x.checked !== x.defaultChecked) || [...document.querySelectorAll('.cform select')].some(x => [...x.options].some(o => o.selected !== o.defaultSelected)) || [...document.querySelectorAll('.cmsg')].some(x => x.textContent) || !!document.querySelector('details[open]'); }
@@ -785,7 +785,7 @@ document.addEventListener('click', async ev => {
     if (t.dataset.ban) {
       const sel = t.parentElement.querySelector('[data-banfor]'), label = sel.selectedOptions[0].text.toLowerCase();
       if (!confirm(`Ban ${t.dataset.ban} ${label === 'permanently' ? 'permanently' : 'for ' + label}?`)) return;
-      t.disabled = true; await post('/api/action', {action: 'ban', ip: t.dataset.ban, hours: Number(sel.value), reason: t.dataset.reason}); document.activeElement && document.activeElement.blur(); loading = false; render(true); return;
+      t.disabled = true; await post('/api/action', {action: 'ban', ip: t.dataset.ban, hours: Number(sel.value), reason: t.dataset.reason}); document.activeElement && document.activeElement.blur(); loading = false; forceRender = true; render(true); return;
     }
     if (t.dataset.copytext) {
       try { await navigator.clipboard.writeText(t.dataset.copytext); } catch (x) { const a = document.createElement('textarea'); a.value = t.dataset.copytext; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); }
@@ -801,7 +801,7 @@ document.addEventListener('click', async ev => {
     if (t.dataset.confirm && !confirm(t.dataset.confirm)) return;
     const body = JSON.parse(t.dataset.act); t.disabled = true; await post('/api/action', body); document.activeElement && document.activeElement.blur(); loading = false;
     if (route().page === 'item' && ['dismiss', 'known'].includes(body.action)) { location.hash = '#/home'; return; }
-    render(true);
+    forceRender = true; render(true);
   } catch (x) { alert(x.message); t.disabled = false; }
 });
 document.addEventListener('change', ev => { const t = ev.target; if (t.dataset && t.dataset.hdr) { const h = t.form.querySelector('[name=header]'); if (h) h.value = JSON.parse(t.dataset.hdr)[t.value] || ''; } });
