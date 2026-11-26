@@ -477,6 +477,13 @@ ${card('This portal', '', `<form class="cform" style="display:flex;flex-directio
 <div class="chips">${fInp('public_url', 'Public address of this portal, used in phone alerts (optional)', {w: '1 1 100%', v: S.public_url, ph: 'https://portal.example.com'})}</div>
 <div class="chips">${fInp('lan_address', 'Portal address on your network, if it guesses wrong (now ' + S.lan_url + ')', {w: '1 1 100%', v: S.lan_address, ph: '192.168.1.50'})}</div>${save()}</form>`, {style: 'flex:1 1 460px'})}
 </div>
+${card('Logo and browser-tab icon', '', `<div class="row">
+${[['logo', 'Logo', 'Shown at the top left of every page and on the sign-in screen. About 64 pixels tall is plenty; wide logos are fine.'], ['favicon', 'Browser-tab icon', 'The small icon on the browser tab and on a phone home-screen shortcut. Square works best. If you set none, the logo is used.']].map(([k, name, help]) => `<div style="flex:1 1 380px;display:flex;flex-direction:column;gap:10px;min-width:0">
+<div class="lbl">${name} <span class="pill ${S.brand[k] ? 'ok' : 'info'}">${S.brand[k] ? 'Your own' : 'Built-in'}</span></div>
+<div class="chips"><img src="/brand/${k}?v=${S.brand_v}" alt="Current ${name.toLowerCase()}" style="height:${k === 'logo' ? 44 : 32}px;width:auto;max-width:200px;border-radius:8px;background:#0B0F13;border:1px solid var(--line2);padding:4px"><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/x-icon,.ico" aria-label="Choose a ${name.toLowerCase()} image" style="flex:1 1 200px;min-width:0;color:var(--muted)"></div>
+<div class="chips"><button class="btn pri" data-brand="${k}">Upload</button>${S.brand[k] ? `<button class="btn" data-brand="${k}" data-reset="1">Use the built-in one</button>` : ''}<span class="cmsg muted" role="status"></span></div>
+<div class="muted small">${help}</div></div>`).join('')}
+</div><div class="muted small">PNG, JPEG, WebP, GIF, SVG or ICO, up to 400 KB. These two images can be seen without signing in, because the sign-in screen shows them.</div>`, {style: 'flex:none'})}
 ${card('About', 'Version ' + e(S.version), `<div><div class="kv"><span>Setup walkthrough</span><a class="btn sm" href="#/setup?step=0">Run it again</a></div><div class="kv"><span>Country and network-owner lookups</span><span class="muted">${S.status.geo ? 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0, refreshed monthly' : 'Database not downloaded yet'}</span></div><div class="kv"><span>Passwords and sign-in</span><a href="#/connections">Connections page</a></div></div>`, {style: 'flex:none'})}`;
 };
 // ---------- traffic analytics ----------
@@ -732,7 +739,7 @@ async function render(quiet) {
   } finally { loading = false; $('#main').style.opacity = ''; }
 }
 // Scrolled down inside a list: hold the page still until the reader returns to the top of it.
-function reading() { return [...document.querySelectorAll('.tw')].some(x => x.scrollTop > 8) || [...document.querySelectorAll('.cform input:not([type=radio]):not([type=checkbox])')].some(x => x.value !== x.defaultValue) || [...document.querySelectorAll('.cform input[type=checkbox], .cform input[type=radio]')].some(x => x.checked !== x.defaultChecked) || [...document.querySelectorAll('.cform select')].some(x => [...x.options].some(o => o.selected !== o.defaultSelected)) || [...document.querySelectorAll('.cmsg')].some(x => x.textContent) || !!document.querySelector('details[open]'); }
+function reading() { return [...document.querySelectorAll('.tw')].some(x => x.scrollTop > 8) || [...document.querySelectorAll('.cform input:not([type=radio]):not([type=checkbox])')].some(x => x.value !== x.defaultValue) || [...document.querySelectorAll('input[type=file]')].some(x => x.value) || [...document.querySelectorAll('.cform input[type=checkbox], .cform input[type=radio]')].some(x => x.checked !== x.defaultChecked) || [...document.querySelectorAll('.cform select')].some(x => [...x.options].some(o => o.selected !== o.defaultSelected)) || [...document.querySelectorAll('.cmsg')].some(x => x.textContent) || !!document.querySelector('details[open]'); }
 function liveLabel() { const p = reading(); $('#live .dot').className = p ? 'dot off' : 'dot'; $('#livetxt').textContent = p ? 'Paused while you read' : 'Live'; }
 document.addEventListener('scroll', ev => { if (ev.target.classList && ev.target.classList.contains('tw')) liveLabel(); }, true);
 function busy() { const a = document.activeElement; return (a && ['INPUT', 'SELECT', 'TEXTAREA'].includes(a.tagName)) || String(window.getSelection()).length > 0; }
@@ -740,6 +747,7 @@ function start() {
   chrome(); render(false); clearInterval(timer);
   timer = setInterval(() => { if (!document.hidden && !reading()) render(true); }, route().page === 'home' ? 5000 : 10000);
 }
+function brandRefresh(v) { $('#logo').src = '/brand/logo?v=' + v; $('#favicon').href = '/brand/favicon?v=' + v; }
 function showSetup() {
   clearInterval(timer); document.querySelector('header').style.display = 'none';
   $('#main').innerHTML = `<form id="setupform" style="max-width:420px;margin:12vh auto;padding:0 20px;display:flex;flex-direction:column;gap:14px"><h1 class="verdict" style="font-size:28px">Welcome to Home Command</h1><div class="muted">This is a new install. Start by choosing the password that protects this portal.</div><label class="muted" for="npw">Password, at least 10 characters</label><input id="npw" type="password" autocomplete="new-password" autofocus><label class="muted" for="npw2">Same again</label><input id="npw2" type="password" autocomplete="new-password"><button class="btn pri" style="justify-content:center">Create password and continue</button><div id="lerr" class="red"></div></form>`;
@@ -768,7 +776,7 @@ document.addEventListener('submit', async ev => {
   } catch (x) { if (f.id === 'login' || f.id === 'setupform') $('#lerr').textContent = x.message; else alert(x.message); }
 });
 document.addEventListener('click', async ev => {
-  const t = ev.target.closest('[data-act],[data-range],[data-name],[data-copy],[data-ban],[data-geo],[data-geopick],[data-cc],[data-copytext],#logout'); if (!t) { $('#results').style.display = 'none'; return; }
+  const t = ev.target.closest('[data-act],[data-range],[data-name],[data-copy],[data-ban],[data-geo],[data-geopick],[data-cc],[data-copytext],[data-brand],#logout'); if (!t) { $('#results').style.display = 'none'; return; }
   try {
     if (t.dataset.cc) { t.checked ? GEO.add(t.dataset.cc) : GEO.delete(t.dataset.cc); return; }
     if (t.dataset.geopick) {
@@ -786,6 +794,19 @@ document.addEventListener('click', async ev => {
       const sel = t.parentElement.querySelector('[data-banfor]'), label = sel.selectedOptions[0].text.toLowerCase();
       if (!confirm(`Ban ${t.dataset.ban} ${label === 'permanently' ? 'permanently' : 'for ' + label}?`)) return;
       t.disabled = true; await post('/api/action', {action: 'ban', ip: t.dataset.ban, hours: Number(sel.value), reason: t.dataset.reason}); document.activeElement && document.activeElement.blur(); loading = false; forceRender = true; render(true); return;
+    }
+    if (t.dataset.brand) {
+      const box = t.closest('div[style]'), m = box.querySelector('.cmsg'), fi = box.querySelector('input[type=file]'); let data = '';
+      if (!t.dataset.reset) {
+        const f = fi.files[0]; if (!f) { m.className = 'cmsg red b'; m.textContent = 'Choose an image file first.'; return; }
+        if (f.size > 400000) { m.className = 'cmsg red b'; m.textContent = 'That image is over 400 KB.'; return; }
+        data = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => bad(new Error('Could not read that file.')); r.readAsDataURL(f); });
+        if (f.name.toLowerCase().endsWith('.ico')) data = data.replace(/^data:[^;]*;/, 'data:image/x-icon;');
+      }
+      m.className = 'cmsg muted'; m.textContent = 'Saving…';
+      try { const r = await post('/api/action', {action: 'brand-save', which: t.dataset.brand, data}); fi.value = ''; brandRefresh(r.v); m.textContent = ''; forceRender = true; loading = false; render(true); }
+      catch (x) { m.className = 'cmsg red b'; m.textContent = x.message; }
+      return;
     }
     if (t.dataset.copytext) {
       try { await navigator.clipboard.writeText(t.dataset.copytext); } catch (x) { const a = document.createElement('textarea'); a.value = t.dataset.copytext; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); }

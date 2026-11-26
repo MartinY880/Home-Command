@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Home Command</title>
+<link rel="icon" id="favicon" href="/brand/favicon">
+<link rel="apple-touch-icon" href="/brand/favicon">
 <style>
 :root{--bg:#0E1217;--bar:#11161C;--card:#141A21;--line:#232A33;--line2:#3A4450;--text:#E6E9EE;--muted:#A3ADBA;--amber:#FFC857;--red:#FF8A80;--blue:#7FB8FF;--chip:#1C232C}
 *{box-sizing:border-box}
@@ -16,7 +18,7 @@ h1,h2,h3{margin:0}
 header{border-bottom:1px solid var(--line);background:var(--bar);position:sticky;top:0;z-index:5}
 .wrap{max-width:1400px;margin:0 auto;padding:0 20px}
 .top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;padding:10px 0}
-.brand{font-weight:700;font-size:17px;letter-spacing:.01em;color:var(--text)}
+.brand{font-weight:700;font-size:17px;letter-spacing:.01em;color:var(--text);display:inline-flex;align-items:center;gap:10px}.brand:hover{text-decoration:none}.brand img{height:30px;width:auto;max-width:160px;border-radius:7px;display:block}
 nav{display:flex;flex-wrap:wrap;gap:2px;flex:1 1 auto}
 nav a{padding:10px 12px;border-radius:8px;color:var(--muted)}nav a:hover{text-decoration:none;color:var(--text)}
 nav a.on{background:var(--chip);color:var(--text);font-weight:600}
@@ -88,7 +90,7 @@ svg{display:block}
 </head>
 <body>
 <header><div class="wrap"><div class="top">
-<a class="brand" href="#/home">Home Command</a>
+<a class="brand" href="#/home"><img id="logo" src="/brand/logo" alt=""><span>Home Command</span></a>
 <nav id="nav" aria-label="Sections"></nav>
 <div class="tools">
 <input id="search" type="search" placeholder="Search address, device, domain" aria-label="Search">

@@ -19,7 +19,7 @@ DBF = CFG.get("db") or os.path.join(DATA, "portal.db")
 os.makedirs(DATA, exist_ok=True)
 # Settings saved from the Settings page and the setup walkthrough; they override the config file.
 SETF = os.path.join(DATA, "settings.json")
-SETTABLE = ("own_ips", "iot_networks", "learn_hours", "thresholds", "retention_days", "public_url", "ntfy", "home", "proxy_type", "chatgpt_model", "setup_done", "ingest_token", "lan_address", "syslog_port")
+SETTABLE = ("own_ips", "iot_networks", "learn_hours", "thresholds", "retention_days", "public_url", "ntfy", "home", "proxy_type", "chatgpt_model", "setup_done", "ingest_token", "lan_address", "syslog_port", "brand")
 OWN, IOT = set(), set(); OWNQ, OWNL = "''", []
 def settings_file(): return json.load(open(SETF)) if os.path.exists(SETF) else {}
 def settings_write(d):
@@ -1581,6 +1581,36 @@ def a_netflow(p):
             "resets": [{"device": b["key"], "n": b["doc_count"], "top": [x["key"] for x in b["top"]["buckets"]]} for b in A["resets"]["src"]["buckets"]],
             "longest": [dict(h["_source"], ts=int(h["_source"]["@timestamp"] / 1000)) for h in longest["hits"]["hits"]],
             "recent": [dict(h["_source"], ts=int(h["_source"]["@timestamp"] / 1000)) for h in recent["hits"]["hits"]]}
+# ---- logo and browser-tab icon: built-in defaults, replaceable from the Settings page
+DEFAULT_LOGO = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#11161C"/><path d="M32 9 12 18v13c0 12.5 8.4 21.4 20 24.5C43.600 52.400 52 43.500 52 31V18z" fill="none" stroke="#7FB8FF" stroke-width="4" stroke-linejoin="round"/><path d="M22 33.500 32 25l10 8.500V43H22z" fill="#7FB8FF"/><rect x="29" y="36" width="6" height="7" fill="#11161C"/></svg>'
+BRAND_TYPES = {"image/png": ("png", b"\x89PNG"), "image/jpeg": ("jpg", b"\xff\xd8\xff"), "image/webp": ("webp", b"RIFF"), "image/gif": ("gif", b"GIF8"), "image/x-icon": ("ico", b"\x00\x00\x01\x00"),
+               "image/vnd.microsoft.icon": ("ico", b"\x00\x00\x01\x00"), "image/svg+xml": ("svg", b"<")}
+def brand_get(which):
+    """(content type, bytes) for the logo or the tab icon. The tab icon falls back to the logo, then to the built-in mark."""
+    b = CFG.get("brand") or {}
+    for k in ([which, "logo"] if which == "favicon" else [which]):
+        m = b.get(k)
+        if m:
+            try: return m["type"], open(os.path.join(DATA, m["file"]), "rb").read()
+            except OSError: pass
+    return "image/svg+xml", DEFAULT_LOGO
+def brand_save(which, data):
+    if which not in ("logo", "favicon"): raise ValueError("unknown image slot")
+    st = settings_file(); b = dict(st.get("brand") or {}); old = b.get(which)
+    if not data: b.pop(which, None)   # back to the built-in one
+    else:
+        m = re.fullmatch(r"data:([a-z0-9.+/-]+);base64,([A-Za-z0-9+/=\s]+)", data)
+        if not m or m[1] not in BRAND_TYPES: raise ValueError("Use a PNG, JPEG, WebP, GIF, SVG or ICO image.")
+        raw = base64.b64decode(m[2]); ext, magic = BRAND_TYPES[m[1]]
+        if len(raw) > 400_000: raise ValueError("That image is over 400 KB. Use a smaller one; a logo only needs to be about 64 pixels tall.")
+        if not raw.lstrip().startswith(magic): raise ValueError("That file is not the kind of image its name says it is.")
+        fn = f"brand-{which}-{secrets.token_hex(4)}.{ext}"
+        with open(os.path.join(DATA, fn), "wb") as f: f.write(raw)
+        b[which] = {"type": "image/x-icon" if ext == "ico" else m[1], "file": fn, "v": int(time.time())}
+    st["brand"] = b; settings_write(st); apply_settings()
+    if old and old.get("file") and re.fullmatch(r"brand-[a-z]+-[0-9a-f]+\.[a-z]+", old["file"]):
+        try: os.remove(os.path.join(DATA, old["file"]))
+        except OSError: pass
 PROXY_NAMES = {"npm": "Nginx Proxy Manager", "traefik": "Traefik", "caddy": "Caddy", "nginx": "nginx or Apache", "none": "no reverse proxy"}
 def home_xy():
     """Where to draw 'Home' on the map: the saved spot, else the middle of the country the internet connection is in."""
@@ -1598,7 +1628,7 @@ def a_settings(p):
     return {"version": VERSION, "networks": nets, "iot_networks": sorted(IOT), "own_ips": sorted(CFG.get("own_ips", [])), "learn_hours": CFG.get("learn_hours", 72),
             "thresholds": {"probe_fails": 30, "auth_fails": 15, **CFG.get("thresholds", {})}, "retention_days": {"req": 90, "fw": 30, "flow": 30, "dns": 30, "wan": 8, **CFG.get("retention_days", {})},
             "public_url": CFG.get("public_url", ""), "ntfy_url": (CFG.get("ntfy") or {}).get("url", ""), "home": CFG.get("home") or {}, "home_xy": home_xy(), "proxy_type": CFG.get("proxy_type", "npm"), "proxy_names": PROXY_NAMES,
-            "chatgpt_model": CFG.get("chatgpt_model", ""), "lan_address": CFG.get("lan_address", ""), "lan_url": lan_url(), "wan": kget("wan_info", {}), "setup_done": bool(CFG.get("setup_done")),
+            "chatgpt_model": CFG.get("chatgpt_model", ""), "lan_address": CFG.get("lan_address", ""), "lan_url": lan_url(), "wan": kget("wan_info", {}), "setup_done": bool(CFG.get("setup_done")), "brand": {k: bool((CFG.get("brand") or {}).get(k)) for k in ("logo", "favicon")}, "brand_v": max([0] + [m.get("v", 0) for m in (CFG.get("brand") or {}).values()]),
             "status": {"unifi": c.get("mode", "none") != "none" and bool(UNI["ok"]) and not UNI["err"], "unifi_error": UNI["err"], "crowdsec": bool(cs_conf().get("url")) and bool(CS.get("ok")), "proxy": bool(reqn), "dns": bool(dnsn) or bool(conns().get("dns")),
                        "syslog": bool(SYS["last"]), "syslog_port": SYS["port"], "netflow": bool(NF["last"]), "netflow_port": NF.get("port", 2055), "elastic": bool(es_conf().get("url")), "geo": bool(GEO["country"])}}
 def settings_save(b):
@@ -1683,6 +1713,7 @@ def a_action(b):
         if pw != b.get("repeat"): raise ValueError("the two entries do not match")
         kset("pwhash", pw_hash(pw)); return {"ok": True, "msg": "Password changed. Devices already signed in stay signed in."}
     elif act == "settings-save": settings_save(b); CACHE.clear(); return {"ok": True, "msg": "Saved."}
+    elif act == "brand-save": brand_save(b.get("which"), b.get("data") or ""); CACHE.clear(); return {"ok": True, "msg": "Saved." if b.get("data") else "Back to the built-in one.", "v": int(time.time())}
     elif act in ("es-test", "es-save"):
         cur = es_conf(); conf = {"url": clean_url(b.get("url")) if (b.get("url") or "").strip() else cur.get("url", ""), "username": (b.get("username") or "").strip() or cur.get("username", ""), "password": b.get("password") or cur.get("password", ""),
                                  "exporters": [x for x in re.split(r"[\s,]+", (b.get("exporters") or "").strip()) if x] if "exporters" in b else cur.get("exporters", [])}
@@ -1762,9 +1793,8 @@ class H(BaseHTTPRequestHandler):
         if not isinstance(body, bytes): body = (json.dumps(body, separators=(",", ":")) if ctype == "application/json" else body).encode()
         self.send_response(code); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff"); self.send_header("X-Frame-Options", "DENY"); self.send_header("Referrer-Policy", "same-origin")
-        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:")
-        self.send_header("Cache-Control", "no-store" if ctype == "application/json" else "no-cache")
-        for k, v in (extra or {}).items(): self.send_header(k, v)
+        hd = {"Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:", "Cache-Control": "no-store" if ctype == "application/json" else "no-cache"}; hd.update(extra or {})
+        for k, v in hd.items(): self.send_header(k, v)
         self.end_headers(); self.wfile.write(body)
     def authed(self):
         # Signed in through authentik: only the reverse proxy can set this header, and it overwrites anything a visitor sends.
@@ -1788,6 +1818,9 @@ class H(BaseHTTPRequestHandler):
                 out = json.dumps(fn(p), separators=(",", ":")).encode()
                 if len(CACHE) > 200: CACHE.clear()
                 CACHE[key] = (time.time(), out); return self.send(200, out)
+            if u.path in ("/brand/logo", "/brand/favicon", "/favicon.ico"):   # public on purpose: the sign-in page shows them
+                ct, body = brand_get("favicon" if "fav" in u.path else "logo")
+                return self.send(200, body, ct, extra={"Cache-Control": "no-cache", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"})
             if u.path.startswith("/install/"):   # shipper installer, for machines that hold log files; needs the ingest token
                 if not hmac.compare_digest(p.get("token", ""), CFG["ingest_token"]): return self.send(403, "wrong token\n", "text/plain")
                 body = open(os.path.join(HERE, "portal-shipper.py")).read() if u.path == "/install/shipper.py" else install_script(u.path[9:])
@@ -1835,7 +1868,7 @@ class H(BaseHTTPRequestHandler):
                 m = re.search(r"hc_session=([A-Za-z0-9_-]+)", self.headers.get("Cookie", "")); SESS.pop(m.group(1), None) if m else None; kset("sessions", SESS)
                 return self.send(200, {"ok": True})
             if u.path == "/api/action":
-                TL.req = self; b = json.loads(self.body()); log("action", self.client(), {k: ("(hidden)" if k in ("password", "key", "repeat") else v) for k, v in b.items()})
+                TL.req = self; b = json.loads(self.body()); log("action", self.client(), {k: ("(hidden)" if k in ("password", "key", "repeat", "data") else v) for k, v in b.items()})
                 return self.send(200, a_action(b))
             self.send(404, {"error": "not found"})
         except (BrokenPipeError, ConnectionResetError): pass
